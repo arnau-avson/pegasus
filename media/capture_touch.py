@@ -1,0 +1,211 @@
+import subprocess
+import datetime
+import csv
+from pathlib import Path
+from PIL import Image, ImageDraw
+
+def check_adb_connection():
+    result = subprocess.run(['adb', 'devices'], capture_output=True, text=True)
+    devices = [line for line in result.stdout.split('\n') if '\tdevice' in line]
+    return len(devices) > 0
+
+def get_screen_resolution():
+    """Obtiene la resolución de la pantalla del dispositivo"""
+    result = subprocess.run(['adb', 'shell', 'wm', 'size'], capture_output=True, text=True)
+    size_line = result.stdout.strip()
+    if 'Physical size:' in size_line:
+        size = size_line.split(': ')[1]
+        width, height = map(int, size.split('x'))
+        return width, height
+    return None, None
+
+def get_touch_event_max_values():
+    """Obtiene los valores máximos del evento táctil"""
+    result = subprocess.run(['adb', 'shell', 'getevent', '-p'], capture_output=True, text=True)
+    max_x, max_y = None, None
+    
+    lines = result.stdout.split('\n')
+    
+    for line in lines:
+        if 'ABS_MT_POSITION_X' in line or '0035' in line:
+            if 'max' in line:
+                try:
+                    parts = line.split('max')
+                    if len(parts) > 1:
+                        max_val = parts[1].split(',')[0].strip()
+                        max_x = int(max_val)
+                except:
+                    pass
+        
+        if 'ABS_MT_POSITION_Y' in line or '0036' in line:
+            if 'max' in line:
+                try:
+                    parts = line.split('max')
+                    if len(parts) > 1:
+                        max_val = parts[1].split(',')[0].strip()
+                        max_y = int(max_val)
+                except:
+                    pass
+    
+    # Si no encontramos los valores, intenta con otro método
+    if not max_x or not max_y:
+        result = subprocess.run(['adb', 'shell', 'getevent', '-lp', '/dev/input/event2'], 
+                               capture_output=True, text=True)
+        
+        for line in result.stdout.split('\n'):
+            if '0035' in line:
+                try:
+                    max_x = int(line.split('max')[1].split(',')[0].strip(), 16)
+                except:
+                    pass
+            if '0036' in line:
+                try:
+                    max_y = int(line.split('max')[1].split(',')[0].strip(), 16)
+                except:
+                    pass
+    
+    return max_x, max_y
+
+def take_screenshot(save_path):
+    """Captura la pantalla y la guarda localmente"""
+    timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S_%f")[:-3]
+    filename = save_path / f"screenshot_{timestamp}.png"
+    
+    subprocess.run(['adb', 'shell', 'screencap', '-p', '/sdcard/screenshot_temp.png'], 
+                   capture_output=True)
+    subprocess.run(['adb', 'pull', '/sdcard/screenshot_temp.png', str(filename)], 
+                   capture_output=True)
+    subprocess.run(['adb', 'shell', 'rm', '/sdcard/screenshot_temp.png'], 
+                   capture_output=True)
+    
+    return filename if filename.exists() else None
+
+def overlay_touch_on_image(image_path, x, y):
+    """Dibuja un punto rojo sutil en las coordenadas"""
+    try:
+        image = Image.open(image_path)
+        draw = ImageDraw.Draw(image)
+        
+        # Punto rojo sutil
+        radius = 8
+        draw.ellipse((x-radius, y-radius, x+radius, y+radius), 
+                     fill="red", outline="red")
+        
+        image.save(image_path)
+        print(f"   ✓ Punto dibujado en ({x}, {y})")
+        return True
+    except Exception as e:
+        print(f"   ✗ Error al dibujar: {e}")
+        return False
+
+def record_touch_coordinates(save_path, csv_file, screen_width, screen_height, max_x, max_y):
+    """Registra las coordenadas de los toques"""
+    EVENT_DEVICE = "/dev/input/event2"
+    
+    print(f"\n🎯 Configuración:")
+    print(f"   Pantalla: {screen_width}x{screen_height}")
+    if max_x and max_y:
+        print(f"   Touch range: {max_x}x{max_y}")
+        print(f"   Factor escala: X={screen_width/max_x:.4f}, Y={screen_height/max_y:.4f}")
+    
+    print(f"\n👆 Toca la pantalla del dispositivo... (Ctrl+C para detener)\n")
+    
+    proc = subprocess.Popen(
+        ["adb", "shell", "getevent", "-lt", EVENT_DEVICE],
+        stdout=subprocess.PIPE, 
+        text=True,
+        bufsize=1
+    )
+    
+    x, y = None, None
+    touch_started = False
+    
+    try:
+        for line in proc.stdout:
+            line = line.strip()
+            
+            if "BTN_TOUCH" in line and "DOWN" in line:
+                touch_started = True
+                x, y = None, None
+            
+            if "ABS_MT_POSITION_X" in line:
+                try:
+                    x = int(line.split()[-1], 16)
+                except ValueError:
+                    continue
+            
+            elif "ABS_MT_POSITION_Y" in line:
+                try:
+                    y = int(line.split()[-1], 16)
+                except ValueError:
+                    continue
+            
+            if "BTN_TOUCH" in line and "UP" in line and touch_started:
+                if x is not None and y is not None:
+                    # Escala las coordenadas
+                    if max_x and max_y:
+                        scaled_x = int((x / max_x) * screen_width)
+                        scaled_y = int((y / max_y) * screen_height)
+                    else:
+                        scaled_x = x
+                        scaled_y = y
+                    
+                    print(f"👆 Toque en ({scaled_x}, {scaled_y})", end=" ")
+                    
+                    screenshot_path = take_screenshot(save_path)
+                    
+                    if screenshot_path:
+                        overlay_touch_on_image(screenshot_path, scaled_x, scaled_y)
+                        
+                        timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
+                        with open(csv_file, 'a', newline='') as f:
+                            writer = csv.writer(f)
+                            writer.writerow([timestamp, scaled_x, scaled_y, screenshot_path.name])
+                    else:
+                        print("✗ Error al capturar")
+                    
+                    x, y = None, None
+                    touch_started = False
+                    
+    except KeyboardInterrupt:
+        print("\n\n⏹️  Detenido")
+    finally:
+        proc.terminate()
+
+def main():
+    print("="*60)
+    print("  CAPTURA DE TOQUES CON PUNTO ROJO")
+    print("="*60)
+    
+    if not check_adb_connection():
+        print("\n✗ No hay conexión ADB")
+        return
+
+    print("\n✓ Conexión ADB establecida")
+    
+    screen_width, screen_height = get_screen_resolution()
+    max_x, max_y = get_touch_event_max_values()
+    
+    if not screen_width or not screen_height:
+        print("✗ No se pudo obtener la resolución de pantalla")
+        return
+    
+    if not max_x or not max_y:
+        print("⚠️  No se detectaron valores máximos del touchscreen")
+        print("   Se usarán coordenadas raw\n")
+    
+    save_path = Path.cwd() / "screenshots"
+    save_path.mkdir(exist_ok=True)
+    
+    csv_file = save_path / "touch_coordinates.csv"
+    if not csv_file.exists():
+        with open(csv_file, 'w', newline='') as f:
+            writer = csv.writer(f)
+            writer.writerow(['Timestamp', 'X', 'Y', 'Screenshot'])
+    
+    record_touch_coordinates(save_path, csv_file, screen_width, screen_height, max_x, max_y)
+    
+    print(f"\n✓ Capturas guardadas en: {save_path}")
+
+if __name__ == "__main__":
+    main()
