@@ -8,7 +8,7 @@ EVENT_DEVICE = "/dev/input/event2"  # CAMBIA ESTO
 
 timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
 csv_file = f"toques_{timestamp}.csv"
-API_URL = "http://localhost:8000/api/all"
+API_URL = "http://localhost:8000/data"
 
 print("🎯 Grabando toques reales (pantalla)")
 print("👉 Toca la PANTALLA (no el teclado)")

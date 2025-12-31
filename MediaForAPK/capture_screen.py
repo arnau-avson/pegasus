@@ -45,7 +45,7 @@ def create_screenshot_directory():
     print(f"📁 Las capturas se guardarán en: {screenshots_dir}")
     return screenshots_dir
 
-API_URL = "http://localhost:8000/api/all"
+API_URL = "http://localhost:8000/upload"
 
 def take_screenshot(device_id, save_path, counter):
     timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -68,7 +68,7 @@ def take_screenshot(device_id, save_path, counter):
             # Send screenshot data to API
             with open(filename, "rb") as image_file:
                 try:
-                    requests.post(API_URL, files={"file": image_file}, data={"type": "screenshot", "timestamp": timestamp})
+                    requests.post(API_URL, files={"image": image_file}, data={"type": "screenshot", "timestamp": timestamp})
                 except requests.exceptions.RequestException as e:
                     print(f"Error sending screenshot to API: {e}")
             
