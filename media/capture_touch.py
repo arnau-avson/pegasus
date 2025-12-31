@@ -3,6 +3,8 @@ import datetime
 import csv
 from pathlib import Path
 from PIL import Image, ImageDraw
+import io
+import threading
 
 def check_adb_connection():
     result = subprocess.run(['adb', 'devices'], capture_output=True, text=True)
@@ -47,7 +49,6 @@ def get_touch_event_max_values():
                 except:
                     pass
     
-    # Si no encontramos los valores, intenta con otro método
     if not max_x or not max_y:
         result = subprocess.run(['adb', 'shell', 'getevent', '-lp', '/dev/input/event2'], 
                                capture_output=True, text=True)
@@ -66,37 +67,39 @@ def get_touch_event_max_values():
     
     return max_x, max_y
 
-def take_screenshot(save_path):
-    """Captura la pantalla y la guarda localmente"""
-    timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S_%f")[:-3]
-    filename = save_path / f"screenshot_{timestamp}.png"
-    
-    subprocess.run(['adb', 'shell', 'screencap', '-p', '/sdcard/screenshot_temp.png'], 
-                   capture_output=True)
-    subprocess.run(['adb', 'pull', '/sdcard/screenshot_temp.png', str(filename)], 
-                   capture_output=True)
-    subprocess.run(['adb', 'shell', 'rm', '/sdcard/screenshot_temp.png'], 
-                   capture_output=True)
-    
-    return filename if filename.exists() else None
-
-def overlay_touch_on_image(image_path, x, y):
-    """Dibuja un punto rojo sutil en las coordenadas"""
+def capture_screenshot_bytes():
+    """Captura la pantalla y devuelve los bytes directamente"""
     try:
-        image = Image.open(image_path)
-        draw = ImageDraw.Draw(image)
+        result = subprocess.run(['adb', 'exec-out', 'screencap', '-p'], 
+                               capture_output=True, 
+                               timeout=2)
+        if result.returncode == 0:
+            return result.stdout
+        return None
+    except:
+        return None
+
+def save_screenshot_with_point(screenshot_bytes, x, y, save_path):
+    """Guarda la captura con el punto dibujado"""
+    try:
+        # Carga la imagen desde memoria
+        image = Image.open(io.BytesIO(screenshot_bytes))
         
-        # Punto rojo sutil
+        # Dibuja el punto rojo
+        draw = ImageDraw.Draw(image)
         radius = 8
         draw.ellipse((x-radius, y-radius, x+radius, y+radius), 
                      fill="red", outline="red")
         
-        image.save(image_path)
-        print(f"   ✓ Punto dibujado en ({x}, {y})")
-        return True
+        # Guarda la imagen
+        timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S_%f")[:-3]
+        filename = save_path / f"screenshot_{timestamp}.png"
+        image.save(filename)
+        
+        return filename
     except Exception as e:
-        print(f"   ✗ Error al dibujar: {e}")
-        return False
+        print(f"   ✗ Error al guardar: {e}")
+        return None
 
 def record_touch_coordinates(save_path, csv_file, screen_width, screen_height, max_x, max_y):
     """Registra las coordenadas de los toques"""
@@ -118,30 +121,37 @@ def record_touch_coordinates(save_path, csv_file, screen_width, screen_height, m
     )
     
     x, y = None, None
+    screenshot_bytes = None
     touch_started = False
     
     try:
         for line in proc.stdout:
             line = line.strip()
             
+            # Cuando detectamos DOWN, capturamos la pantalla INMEDIATAMENTE
             if "BTN_TOUCH" in line and "DOWN" in line:
                 touch_started = True
                 x, y = None, None
+                # Captura inmediata en el momento del toque
+                print("📸 Capturando...", end=" ", flush=True)
+                screenshot_bytes = capture_screenshot_bytes()
             
-            if "ABS_MT_POSITION_X" in line:
+            # Capturamos las coordenadas
+            if "ABS_MT_POSITION_X" in line and touch_started:
                 try:
                     x = int(line.split()[-1], 16)
                 except ValueError:
                     continue
             
-            elif "ABS_MT_POSITION_Y" in line:
+            elif "ABS_MT_POSITION_Y" in line and touch_started:
                 try:
                     y = int(line.split()[-1], 16)
                 except ValueError:
                     continue
             
+            # Cuando se levanta el dedo, procesamos
             if "BTN_TOUCH" in line and "UP" in line and touch_started:
-                if x is not None and y is not None:
+                if x is not None and y is not None and screenshot_bytes is not None:
                     # Escala las coordenadas
                     if max_x and max_y:
                         scaled_x = int((x / max_x) * screen_width)
@@ -150,22 +160,27 @@ def record_touch_coordinates(save_path, csv_file, screen_width, screen_height, m
                         scaled_x = x
                         scaled_y = y
                     
-                    print(f"👆 Toque en ({scaled_x}, {scaled_y})", end=" ")
+                    print(f"👆 ({scaled_x}, {scaled_y}) - Guardando...", end=" ", flush=True)
                     
-                    screenshot_path = take_screenshot(save_path)
+                    # Guarda con el punto dibujado
+                    screenshot_path = save_screenshot_with_point(screenshot_bytes, scaled_x, scaled_y, save_path)
                     
                     if screenshot_path:
-                        overlay_touch_on_image(screenshot_path, scaled_x, scaled_y)
-                        
                         timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
                         with open(csv_file, 'a', newline='') as f:
                             writer = csv.writer(f)
                             writer.writerow([timestamp, scaled_x, scaled_y, screenshot_path.name])
+                        print("✓")
                     else:
-                        print("✗ Error al capturar")
-                    
-                    x, y = None, None
-                    touch_started = False
+                        print("✗")
+                elif screenshot_bytes is None:
+                    print("✗ No se capturó pantalla")
+                else:
+                    print("✗ Coordenadas incompletas")
+                
+                x, y = None, None
+                screenshot_bytes = None
+                touch_started = False
                     
     except KeyboardInterrupt:
         print("\n\n⏹️  Detenido")
@@ -174,7 +189,7 @@ def record_touch_coordinates(save_path, csv_file, screen_width, screen_height, m
 
 def main():
     print("="*60)
-    print("  CAPTURA DE TOQUES CON PUNTO ROJO")
+    print("  CAPTURA INSTANTÁNEA DE TOQUES")
     print("="*60)
     
     if not check_adb_connection():
