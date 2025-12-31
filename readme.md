@@ -46,3 +46,6 @@ python touch_recorder.py
 
 ## Licencia
 Este proyecto está bajo la licencia MIT.
+
+# Ruta de la APK generada
+pegasus\ApkArnau\build\ApkArnau\android\gradle\app\build\outputs\apk\debug\app-debug.apk
