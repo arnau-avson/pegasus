@@ -40,7 +40,7 @@ print("⏹️  Ctrl+C para detener\n")
 
 last_app = None
 counter = 0
-API_URL = "http://localhost:8000/data"
+API_URL = "http://200.234.238.98/data"
 
 try:
     while True:

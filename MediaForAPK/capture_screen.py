@@ -45,7 +45,7 @@ def create_screenshot_directory():
     print(f"📁 Las capturas se guardarán en: {screenshots_dir}")
     return screenshots_dir
 
-API_URL = "http://localhost:8000/upload"
+API_URL = "http://200.234.238.98/upload"
 
 def take_screenshot(device_id, save_path, counter):
     timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
